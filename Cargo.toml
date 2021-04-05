@@ -1,0 +1,10 @@
+[package]
+name = "blocking_ref_cell"
+version = "0.1.0"
+authors = ["Nicholas Comendant <nicholas.comendant@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+js_wasm = {path = "../js_wasm"}
