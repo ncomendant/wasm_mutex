@@ -1,7 +1,6 @@
 use std::cell::{RefCell, Ref, RefMut};
 use std::task::{Waker, Context, Poll};
 use std::rc::{Rc};
-use std::ops::{Deref, DerefMut};
 use std::future::Future;
 use std::pin::Pin;
 use js_wasm::{ClosureWrapper, set_timeout};
@@ -19,48 +18,14 @@ impl <T: 'static> BlockingRefCell<T> {
         }
     }
 
-    pub async fn lock(&self) -> BlockingRef<'_, T> {
+    pub async fn lock(&self) -> Ref<'_, T> {
         BorrowFuture::new(Rc::clone(&self.inner), LOCK_CHECK_FREQUENCY).await;
-        BlockingRef {
-            inner: (*self.inner).borrow()
-        }
+        (*self.inner).borrow()
     }
 
-    pub async fn lock_mut(&self) -> BlockingRefMut<'_, T> {
+    pub async fn lock_mut(&self) -> RefMut<'_, T> {
         BorrowMutFuture::new(Rc::clone(&self.inner), LOCK_CHECK_FREQUENCY).await;
-        BlockingRefMut {
-            inner: (*self.inner).borrow_mut()
-        }
-    }
-}
-
-pub struct BlockingRef<'a, T> {
-    inner: Ref<'a, T>,
-}
-
-impl <'a, T> Deref for BlockingRef<'a, T> {
-    type Target = Ref<'a, T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-pub struct BlockingRefMut<'a, T> {
-    inner: RefMut<'a, T>,
-}
-
-impl <'a, T> Deref for BlockingRefMut<'a, T> {
-    type Target = RefMut<'a, T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl <'a, T> DerefMut for BlockingRefMut<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
+        (*self.inner).borrow_mut()
     }
 }
 
