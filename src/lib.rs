@@ -6,7 +6,7 @@ use std::future::Future;
 use std::pin::Pin;
 use js_wasm::{ClosureWrapper, set_timeout};
 
-const LOCK_CHECK_FREQUENCY: u32 = 50;
+const LOCK_CHECK_FREQUENCY: u32 = 0;
 
 pub struct BlockingRefCell<T> {
     inner: Rc<RefCell<T>>,
