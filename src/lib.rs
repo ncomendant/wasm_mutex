@@ -7,13 +7,13 @@ use js_wasm::{ClosureWrapper, set_timeout};
 
 const LOCK_CHECK_FREQUENCY: u32 = 0;
 
-pub struct BlockingRefCell<T> {
+pub struct Mutex<T> {
     inner: Rc<RefCell<T>>,
 }
 
-impl <T: 'static> BlockingRefCell<T> {
+impl <T: 'static> Mutex<T> {
     pub fn new(value: T) -> Self {
-        BlockingRefCell {
+        Mutex {
             inner: Rc::new(RefCell::new(value)),
         }
     }

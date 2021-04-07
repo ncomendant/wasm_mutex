@@ -1,5 +1,5 @@
 [package]
-name = "blocking_ref_cell"
+name = "wasm_mutex"
 version = "0.1.0"
 authors = ["Nicholas Comendant <nicholas.comendant@gmail.com>"]
 edition = "2018"
