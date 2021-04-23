@@ -1,134 +1,131 @@
-use std::cell::{RefCell, Ref, RefMut};
+use std::cell::{RefCell, RefMut};
 use std::task::{Waker, Context, Poll};
 use std::rc::{Rc};
 use std::future::Future;
 use std::pin::Pin;
-use js_wasm::{ClosureWrapper, set_timeout};
+use std::ops::{Deref, DerefMut};
+use std::marker::PhantomData;
 
-const LOCK_CHECK_FREQUENCY: u32 = 0;
+type WakerId = u32;
+
+struct MutexState {
+    wakers: Vec<(WakerId, Waker)>,
+    next_waker_id: WakerId,
+}
 
 pub struct Mutex<T> {
-    inner: Rc<RefCell<T>>,
+    value: Rc<RefCell<T>>,
+    state: Rc<RefCell<MutexState>>,
 }
 
-impl <T: 'static> Mutex<T> {
+impl <T> Mutex<T> {
     pub fn new(value: T) -> Self {
         Mutex {
-            inner: Rc::new(RefCell::new(value)),
+            value: Rc::new(RefCell::new(value)),
+            state: Rc::new(RefCell::new(MutexState {
+                wakers: vec![],
+                next_waker_id: 0,
+            }))
         }
     }
 
-    pub async fn lock(&self) -> Ref<'_, T> {
-        BorrowFuture::new(Rc::clone(&self.inner), LOCK_CHECK_FREQUENCY).await;
-        (*self.inner).borrow()
+    pub fn lock(&self) -> LockFuture<T> {
+        let waker_id = {
+            let mut state = (*self.state).borrow_mut();
+            let waker_id = state.next_waker_id;
+            state.next_waker_id += 1;
+            waker_id
+        };
+        let state = self.state.clone();
+        LockFuture {
+            waker_id,
+            value: &self.value,
+            state: self.state.clone(),
+            set_wake: Box::new(move |waker_id, waker| {
+                let mut state = (*state).borrow_mut();
+                let index = state.wakers.iter().position(|(id, _waker)| *id == waker_id);
+                if let Some(index) = index {
+                    state.wakers.insert(index, (waker_id, waker));
+                } else {
+                    state.wakers.push((waker_id, waker));
+                }
+            }),
+            phantom: PhantomData
+        }
     }
 
-    pub async fn lock_mut(&self) -> RefMut<'_, T> {
-        BorrowMutFuture::new(Rc::clone(&self.inner), LOCK_CHECK_FREQUENCY).await;
-        (*self.inner).borrow_mut()
-    }
-}
-
-struct BorrowSharedState<T> {
-    model: Rc<RefCell<T>>,
-    waker: Option<Waker>,
-    closure: Option<ClosureWrapper>,
-}
-
-struct BorrowFuture<T> {
-    shared_state: Rc<RefCell<BorrowSharedState<T>>>,
-}
-
-impl <T> Future for BorrowFuture<T> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Ok(mut shared_state) = self.shared_state.try_borrow_mut() {
-            if shared_state.model.try_borrow().is_ok() {
-                Poll::Ready(())
-            } else {
-                shared_state.waker = Some(cx.waker().clone());
-                Poll::Pending
-            }
+    pub fn try_lock(&self) -> Option<MutexRef<T>> {
+        if let Ok(v) = self.value.try_borrow_mut() {
+            let r = MutexRef::new(v, self.state.clone());
+            Some(r)
         } else {
+            None
+        }
+    }
+}
+
+pub struct MutexRef<'a, T> {
+    core: RefMut<'a, T>,
+    on_drop: Box<dyn FnMut()>,
+}
+
+impl <'a, T> MutexRef<'a, T> {
+    fn new(core: RefMut<'a, T>, state: Rc<RefCell<MutexState>>) -> Self {
+        MutexRef {
+            core,
+            on_drop: Box::new(move || {
+                let w = {
+                    let mut state = (*state).borrow_mut();
+                    state.wakers.pop()
+                };
+
+                if let Some((_waker_id, waker)) = w {
+                    waker.wake();
+                }
+            }),
+        }
+    }
+}
+
+impl <'a, T> Deref for MutexRef<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+
+impl <'a, T> DerefMut for MutexRef<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
+}
+
+impl <'a, T> Drop for MutexRef<'a, T> {
+    fn drop(&mut self) {
+        (self.on_drop)();
+    }
+}
+
+pub struct LockFuture<'a, T> {
+    waker_id: WakerId,
+    value: &'a Rc<RefCell<T>>,
+    state: Rc<RefCell<MutexState>>,
+    set_wake: Box<dyn FnMut(WakerId, Waker)>,
+    phantom: PhantomData<&'a T>,
+}
+
+impl <'a, T: 'static> Future for LockFuture<'a, T> {
+    type Output = MutexRef<'a, T>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Ok(v) = self.value.try_borrow_mut() {
+            let r = MutexRef::new(v, self.state.clone());
+            Poll::Ready(r)
+        } else {
+            let waker_id = self.waker_id;
+            (self.set_wake)(waker_id, cx.waker().clone());
             Poll::Pending
-        }
-    }
-}
-
-impl <T: 'static> BorrowFuture<T> {
-    fn new(model: Rc<RefCell<T>>, duration: u32) -> Self {
-        let shared_state = Rc::new(RefCell::new(BorrowSharedState { model, waker: None, closure: None }));
-        BorrowFuture::check(shared_state.clone(), duration);
-        BorrowFuture {
-            shared_state
-        }
-    }
-
-    fn check(state: Rc<RefCell<BorrowSharedState<T>>>, duration: u32) {
-        let state_clone = state.clone();
-        let mut unlocked_state = (*state_clone).borrow_mut();
-
-        if unlocked_state.model.try_borrow().is_ok() {
-            unlocked_state.closure = None;
-            if let Some(waker) = unlocked_state.waker.take() {
-                waker.wake();
-            }
-        } else {
-            let c = set_timeout(duration, move || {
-                BorrowFuture::check(state.clone(), duration);
-            });
-
-            unlocked_state.closure = Some(c.1);
-        }
-    }
-}
-
-struct BorrowMutFuture<T> {
-    shared_state: Rc<RefCell<BorrowSharedState<T>>>,
-}
-
-impl <T> Future for BorrowMutFuture<T> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Ok(mut shared_state) = self.shared_state.try_borrow_mut() {
-            if shared_state.model.try_borrow_mut().is_ok() {
-                Poll::Ready(())
-            } else {
-                shared_state.waker = Some(cx.waker().clone());
-                Poll::Pending
-            }
-        } else {
-            Poll::Pending
-        }
-    }
-}
-
-impl <T: 'static> BorrowMutFuture<T> {
-    fn new(model: Rc<RefCell<T>>, duration: u32) -> Self {
-        let shared_state = Rc::new(RefCell::new(BorrowSharedState { model, waker: None, closure: None }));
-        BorrowMutFuture::check(shared_state.clone(), duration);
-        BorrowMutFuture {
-            shared_state
-        }
-    }
-
-    fn check(state: Rc<RefCell<BorrowSharedState<T>>>, duration: u32) {
-        let state_clone = state.clone();
-        let mut unlocked_state = (*state_clone).borrow_mut();
-
-        if unlocked_state.model.try_borrow_mut().is_ok() {
-            unlocked_state.closure = None;
-            if let Some(waker) = unlocked_state.waker.take() {
-                waker.wake();
-            }
-        } else {
-            let c = set_timeout(duration, move || {
-                BorrowFuture::check(state.clone(), duration);
-            });
-
-            unlocked_state.closure = Some(c.1);
         }
     }
 }
