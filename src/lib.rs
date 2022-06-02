@@ -8,11 +8,13 @@ use std::marker::PhantomData;
 
 type WakerId = u32;
 
+#[derive(Debug, Clone)]
 struct MutexState {
     wakers: Vec<(WakerId, Waker)>,
     next_waker_id: WakerId,
 }
 
+#[derive(Debug, Clone)]
 pub struct Mutex<T> {
     value: Rc<RefCell<T>>,
     state: Rc<RefCell<MutexState>>,
