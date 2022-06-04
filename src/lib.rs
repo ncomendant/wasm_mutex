@@ -1,6 +1,6 @@
 use std::cell::{RefCell, RefMut};
 use std::task::{Waker, Context, Poll};
-use std::rc::{Rc};
+use std::rc::Rc;
 use std::future::Future;
 use std::pin::Pin;
 use std::ops::{Deref, DerefMut};
@@ -14,20 +14,32 @@ struct MutexState {
     next_waker_id: WakerId,
 }
 
+impl Default for MutexState {
+    fn default() -> Self {
+        Self {
+            wakers: Default::default(),
+            next_waker_id: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Mutex<T> {
     value: Rc<RefCell<T>>,
     state: Rc<RefCell<MutexState>>,
 }
 
+impl <T: Default> Default for Mutex<T> {
+    fn default() -> Self {
+        Self { value: Default::default(), state: Default::default() }
+    }
+}
+
 impl <T> Mutex<T> {
     pub fn new(value: T) -> Self {
         Mutex {
             value: Rc::new(RefCell::new(value)),
-            state: Rc::new(RefCell::new(MutexState {
-                wakers: vec![],
-                next_waker_id: 0,
-            }))
+            state: Default::default(),
         }
     }
 
