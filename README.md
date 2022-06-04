@@ -1,8 +1,8 @@
 # wasm_mutex
  
-`wasm_mutex::Mutex` is specifically used for single-threaded WebAssembly applications. Simlar to `std::sync::Mutex`, the data can be accessed through `lock` or `try_lock`, which guarantees that the data is only ever accessed when the mutex is locked.
+`wasm_mutex::Mutex` is specifically used for single-threaded WebAssembly applications. Similar to `std::sync::Mutex`, the data can be accessed through `lock` or `try_lock`, which guarantees that the data is only ever accessed when the mutex is locked.
 
-Data stored in a `RefCell<T>` encounter a `BorrowError` or `BorrowMutError` when multiple closures attempt to access the same data simulatenously (e.g. a click event handler and a set interval handler). Similarly, a `std::sync::Mutex` will panic under the same circumstances, due to calling lock while the lock is already held by the current thread. `wasm_mutex::Mutex` will allow the data to be locked and unlocked, allowing single access to the data at any given time.
+Data stored in a `RefCell<T>` encounter a `BorrowError` or `BorrowMutError` when multiple closures attempt to access the same data simulatenously (e.g. a click event handler and a set interval handler). Similarly, a `std::sync::Mutex` will panic under the same circumstances, due to calling lock while the lock is already being held by the current thread. `wasm_mutex::Mutex` will allow the data to be locked and unlocked, allowing single access to the data at any given time.
 
 ## Example Usage
 
