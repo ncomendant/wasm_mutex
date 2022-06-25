@@ -5,6 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::ops::{Deref, DerefMut};
 use std::marker::PhantomData;
+use serde::{Serialize, Deserialize};
 
 type WakerId = u32;
 
@@ -32,6 +33,23 @@ pub struct Mutex<T> {
 impl <T: Default> Default for Mutex<T> {
     fn default() -> Self {
         Self { value: Default::default(), state: Default::default() }
+    }
+}
+
+impl <T: Serialize> Serialize for Mutex<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where S: serde::Serializer {
+        serializer.serialize_newtype_struct("Mutex", &*self.value)
+    }
+}
+
+impl <'de, T: Deserialize<'de>> Deserialize<'de> for Mutex<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where D: serde::Deserializer<'de> {
+        Ok(Mutex {
+            value: Rc::new(RefCell::deserialize(deserializer)?),
+            state: Default::default(),
+        })
     }
 }
 
