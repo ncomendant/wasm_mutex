@@ -1,23 +1,11 @@
+use std::cell::{RefCell, RefMut};
 use std::task::{Waker, Context, Poll};
+use std::rc::Rc;
 use std::future::Future;
 use std::pin::Pin;
 use std::ops::{Deref, DerefMut};
 use std::marker::PhantomData;
-
-#[cfg(not(feature = "async"))]
-type Pointer<T> = std::rc::Rc<T>;
-#[cfg(feature = "async")]
-type Pointer<T> = std::sync::Arc<T>;
-
-#[cfg(not(feature = "async"))]
-type MutMem<T> = std::cell::RefCell<T>;
-#[cfg(feature = "async")]
-type MutMem<T> = std::sync::Mutex<T>;
-
-#[cfg(not(feature = "async"))]
-type Guard<'a, T> = std::cell::RefMut<'a, T>;
-#[cfg(feature = "async")]
-type Guard<'a, T> = std::sync::MutexGuard<'a, T>;
+use serde::{Serialize, Deserialize};
 
 type WakerId = u32;
 
@@ -38,8 +26,8 @@ impl Default for MutexState {
 
 #[derive(Debug, Clone)]
 pub struct Mutex<T> {
-    value: Pointer<MutMem<T>>,
-    state: Pointer<MutMem<MutexState>>,
+    value: Rc<RefCell<T>>,
+    state: Rc<RefCell<MutexState>>,
 }
 
 impl <T: Default> Default for Mutex<T> {
@@ -48,18 +36,18 @@ impl <T: Default> Default for Mutex<T> {
     }
 }
 
-impl <T: serde::Serialize> serde::Serialize for Mutex<T> {
+impl <T: Serialize> Serialize for Mutex<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where S: serde::Serializer {
         serializer.serialize_newtype_struct("Mutex", &*self.value)
     }
 }
 
-impl <'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Mutex<T> {
+impl <'de, T: Deserialize<'de>> Deserialize<'de> for Mutex<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where D: serde::Deserializer<'de> {
         Ok(Mutex {
-            value: Pointer::new(MutMem::deserialize(deserializer)?),
+            value: Rc::new(RefCell::deserialize(deserializer)?),
             state: Default::default(),
         })
     }
@@ -68,17 +56,14 @@ impl <'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Mutex<T> {
 impl <T> Mutex<T> {
     pub fn new(value: T) -> Self {
         Mutex {
-            value: Pointer::new(MutMem::new(value)),
+            value: Rc::new(RefCell::new(value)),
             state: Default::default(),
         }
     }
 
     pub fn lock(&self) -> LockFuture<T> {
         let waker_id = {
-            #[cfg(not(feature = "async"))]
             let mut state = (*self.state).borrow_mut();
-            #[cfg(feature = "async")]
-            let mut state = (*self.state).try_lock().unwrap();
             let waker_id = state.next_waker_id;
             state.next_waker_id += 1;
             waker_id
@@ -89,10 +74,7 @@ impl <T> Mutex<T> {
             value: &self.value,
             state: self.state.clone(),
             set_wake: Box::new(move |waker_id, waker| {
-                #[cfg(not(feature = "async"))]
                 let mut state = (*state).borrow_mut();
-                #[cfg(feature = "async")]
-                let mut state = (*state).try_lock().unwrap();
                 let index = state.wakers.iter().position(|(id, _waker)| *id == waker_id);
                 if let Some(index) = index {
                     state.wakers.insert(index, (waker_id, waker));
@@ -105,12 +87,7 @@ impl <T> Mutex<T> {
     }
 
     pub fn try_lock(&self) -> Option<MutexRef<T>> {
-        #[cfg(not(feature = "async"))]
-        let v = self.value.try_borrow_mut();
-        #[cfg(feature = "async")]
-        let v = self.value.try_lock();
-
-        if let Ok(v) = v {
+        if let Ok(v) = self.value.try_borrow_mut() {
             let r = MutexRef::new(v, self.state.clone());
             Some(r)
         } else {
@@ -120,20 +97,17 @@ impl <T> Mutex<T> {
 }
 
 pub struct MutexRef<'a, T> {
-    core: Guard<'a, T>,
-    on_drop: Box<dyn Fn()>,
+    core: RefMut<'a, T>,
+    on_drop: Box<dyn FnMut()>,
 }
 
 impl <'a, T> MutexRef<'a, T> {
-    fn new(core: Guard<'a, T>, state: Pointer<MutMem<MutexState>>) -> Self {
+    fn new(core: RefMut<'a, T>, state: Rc<RefCell<MutexState>>) -> Self {
         MutexRef {
             core,
             on_drop: Box::new(move || {
                 let w = {
-                    #[cfg(not(feature = "async"))]
                     let mut state = (*state).borrow_mut();
-                    #[cfg(feature = "async")]
-                    let mut state = (*state).try_lock().unwrap();
                     state.wakers.pop()
                 };
 
@@ -167,25 +141,17 @@ impl <'a, T> Drop for MutexRef<'a, T> {
 
 pub struct LockFuture<'a, T> {
     waker_id: WakerId,
-    value: &'a Pointer<MutMem<T>>,
-    state: Pointer<MutMem<MutexState>>,
-    #[cfg(not(feature = "async"))]
-    set_wake: Box<dyn Fn(WakerId, Waker)>,
-    #[cfg(feature = "async")]
-    set_wake: Box<dyn Fn(WakerId, Waker) + Send>,
+    value: &'a Rc<RefCell<T>>,
+    state: Rc<RefCell<MutexState>>,
+    set_wake: Box<dyn FnMut(WakerId, Waker)>,
     phantom: PhantomData<&'a T>,
 }
 
 impl <'a, T: 'static> Future for LockFuture<'a, T> {
     type Output = MutexRef<'a, T>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        #[cfg(not(feature = "async"))]
-        let v = self.value.try_borrow_mut();
-        #[cfg(feature = "async")]
-        let v = self.value.try_lock();
-
-        if let Ok(v) = v {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if let Ok(v) = self.value.try_borrow_mut() {
             let r = MutexRef::new(v, self.state.clone());
             Poll::Ready(r)
         } else {
