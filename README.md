@@ -1,3 +1,5 @@
+*This library is now deprecated. Please consider using an alternative, such as [tokio::sync::Mutex](https://docs.rs/tokio/latest/tokio/sync/struct.Mutex.html).*
+
 # wasm_mutex
  
 `wasm_mutex::Mutex` is specifically used for single-threaded WebAssembly applications. Similar to `std::sync::Mutex`, the data can be accessed through `lock` or `try_lock`, which guarantees that the data is only ever accessed when the mutex is locked.
