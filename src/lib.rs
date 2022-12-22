@@ -25,7 +25,7 @@ impl Default for MutexState {
 }
 
 #[derive(Debug, Clone)]
-pub struct Mutex<T> {
+pub struct Mutex<T: ?Sized> {
     value: Rc<RefCell<T>>,
     state: Rc<RefCell<MutexState>>,
 }
